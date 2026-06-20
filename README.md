@@ -10,7 +10,7 @@ ZGPookingOverlayKit.framework/ZGPookingOverlayKit
 
 It does not contain injection, loader, tweak, or auto-start code. The host app must call the public API.
 
-Prediction lines are OFF by default. Starting the overlay only shows the draggable menu bubble. Lines appear after the menu `OVERLAY ON` toggle is tapped or after the host applies settings with `predictionEnabled = YES`.
+Prediction lines are OFF by default. Starting the overlay only shows the draggable `ZG` bubble and `AIM OFF` quick button. Lines appear after `AIM ON` / `Enable Prediction` is tapped, or after the host applies settings with `predictionEnabled = YES`.
 
 ## Files
 
@@ -91,7 +91,12 @@ These are included in the dynamic framework target and are useful if you later b
 
 ## Frame Scanner
 
-The scanner path is optional. It does not record the screen by itself. The host app must pass frame bytes it already owns:
+The scanner path has two clean routes:
+
+1. Host-fed frames through `ZGPookingOverlayUpdateFromFrameBytes(...)`.
+2. The in-overlay `Live Scanner` toggle, which captures the host view behind the overlay, hides the overlay from the scan, scales detected geometry back to overlay coordinates, and feeds the prediction engine.
+
+The host-fed route still gives the most control:
 
 ```objc
 BOOL ok = ZGPookingOverlayUpdateFromFrameBytes(bytes,
@@ -101,7 +106,7 @@ BOOL ok = ZGPookingOverlayUpdateFromFrameBytes(bytes,
                                                ZGPookingPixelFormatBGRA8888);
 ```
 
-The scanner estimates the Pooking table area, cue ball, visible balls, and the bright/cyan/violet on-screen guide line, then feeds the prediction engine. Best accuracy still comes from direct game geometry; frame scanning is a fallback when geometry is not available.
+The scanner estimates the Pooking table area, cue ball, visible balls, and the bright/cyan/violet on-screen guide line, then feeds the prediction engine. Best accuracy still comes from direct game geometry; frame scanning is a fallback when geometry is not available. If iOS does not expose the game renderer through normal view capture, feed BGRA/RGBA bytes from the host render path instead.
 
 ## Dynamic Guide Solver
 
@@ -175,9 +180,12 @@ For non-guided Bank Shot mode, the ghost-ball point is calculated from the chose
 ## Menu Features
 
 - Draggable `ZG` bubble.
-- Overlay ON/OFF.
 - Floating `AIM ON/OFF` quick button.
-- Movable menu panel.
+- Movable dark ZavIOS menu panel based on the reference layout.
+- Left ZavIOS sidebar with Visuals / Aim Menu / Settings labels.
+- Prediction / Bounds / Table Info tabs.
+- `Enable Prediction` master switch.
+- `Live Scanner` ON/OFF route for immediate in-host view scanning.
 - Pooking aim ladder ON/OFF.
 - Four-line prediction pack ON/OFF.
 - Hidden line recording ON/OFF.
@@ -209,6 +217,8 @@ For non-guided Bank Shot mode, the ghost-ball point is calculated from the chose
 - Detected balls toggle.
 - Table centerline toggle.
 - Dark floating menu with `created by zav G` footer.
+
+Tapping `AIM ON` enables the full prediction bundle at once: prediction, live scanner, cue path, pocket path, bank path, carom path, ladder guide, collision warnings, pocket heat, four-line style, hidden line buffer, ghost ball, detected balls, and centerlines. Tapping `AIM OFF` disables all of those again so the overlay launches clean and quiet.
 
 ## Important
 

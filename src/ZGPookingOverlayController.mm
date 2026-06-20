@@ -3,6 +3,12 @@
 #include "ZGPookingEngine.hpp"
 #include "ZGPookingFrameScanner.hpp"
 
+#include <algorithm>
+#include <cmath>
+#include <vector>
+
+#import <QuartzCore/QuartzCore.h>
+
 static NSString *ZGOnOff(BOOL value) {
     return value ? @"ON" : @"OFF";
 }
@@ -71,6 +77,25 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     return out;
 }
 
+static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
+    if (scale <= 0.0 || std::fabs(scale - 1.0) < 0.001) return;
+    state.table.x *= scale;
+    state.table.y *= scale;
+    state.table.width *= scale;
+    state.table.height *= scale;
+    state.cueBall.x *= scale;
+    state.cueBall.y *= scale;
+    state.guide.start.x *= scale;
+    state.guide.start.y *= scale;
+    state.guide.end.x *= scale;
+    state.guide.end.y *= scale;
+    for (auto &ball : state.balls) {
+        ball.center.x *= scale;
+        ball.center.y *= scale;
+        ball.radius *= scale;
+    }
+}
+
 @interface ZGPookingOverlaySettings ()
 - (zg::Settings)zg_settings;
 @end
@@ -80,20 +105,21 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 + (instancetype)defaults {
     ZGPookingOverlaySettings *settings = [[ZGPookingOverlaySettings alloc] init];
     settings.predictionEnabled = NO;
-    settings.cuePredictionEnabled = YES;
-    settings.pocketPredictionEnabled = YES;
-    settings.bankPredictionEnabled = YES;
-    settings.caromPredictionEnabled = YES;
-    settings.ladderGuideEnabled = YES;
-    settings.collisionWarningEnabled = YES;
-    settings.pocketHeatEnabled = YES;
-    settings.fourLinePredictionEnabled = YES;
-    settings.hiddenLineRecordingEnabled = YES;
+    settings.cuePredictionEnabled = NO;
+    settings.pocketPredictionEnabled = NO;
+    settings.bankPredictionEnabled = NO;
+    settings.caromPredictionEnabled = NO;
+    settings.ladderGuideEnabled = NO;
+    settings.collisionWarningEnabled = NO;
+    settings.pocketHeatEnabled = NO;
+    settings.fourLinePredictionEnabled = NO;
+    settings.hiddenLineRecordingEnabled = NO;
     settings.scanSmoothingEnabled = YES;
+    settings.liveScanEnabled = NO;
     settings.manualPocket = NO;
-    settings.showSideLines = YES;
-    settings.showDetectedBalls = YES;
-    settings.showGhostBall = YES;
+    settings.showSideLines = NO;
+    settings.showDetectedBalls = NO;
+    settings.showGhostBall = NO;
     settings.lineLength = 1.10;
     settings.maxBounces = 4;
     settings.selectedPocket = 1;
@@ -116,6 +142,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     copy.fourLinePredictionEnabled = self.fourLinePredictionEnabled;
     copy.hiddenLineRecordingEnabled = self.hiddenLineRecordingEnabled;
     copy.scanSmoothingEnabled = self.scanSmoothingEnabled;
+    copy.liveScanEnabled = self.liveScanEnabled;
     copy.manualPocket = self.manualPocket;
     copy.showSideLines = self.showSideLines;
     copy.showDetectedBalls = self.showDetectedBalls;
@@ -219,6 +246,9 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 @property (nonatomic, strong) UIView *menuView;
 @property (nonatomic, strong) UILabel *statusLabel;
 @property (nonatomic) CGFloat lastScanConfidence;
+@property (nonatomic, strong) CADisplayLink *liveScanLink;
+@property (nonatomic) CFTimeInterval lastLiveScanTimestamp;
+@property (nonatomic) BOOL liveScanBusy;
 @property (nonatomic, strong) UIButton *enabledButton;
 @property (nonatomic, strong) UIButton *cueButton;
 @property (nonatomic, strong) UIButton *pocketPathButton;
@@ -229,6 +259,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 @property (nonatomic, strong) UIButton *pocketHeatButton;
 @property (nonatomic, strong) UIButton *fourLineButton;
 @property (nonatomic, strong) UIButton *hiddenRecordButton;
+@property (nonatomic, strong) UIButton *liveScanButton;
 @property (nonatomic, strong) UIButton *scanSmoothButton;
 @property (nonatomic, strong) UIButton *shotModeButton;
 @property (nonatomic, strong) UIButton *routeButton;
@@ -239,8 +270,9 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 @property (nonatomic, strong) UIButton *ghostButton;
 @property (nonatomic, strong) UIButton *ballsButton;
 @property (nonatomic, strong) UIButton *sideLinesButton;
-@property (nonatomic, strong) UIView *restoreHotspot;
-@property (nonatomic) BOOL controlsHidden;
+- (void)recompute;
+- (void)refreshLiveScanState;
+- (void)stopLiveScan;
 @end
 
 @implementation ZGPookingOverlayView
@@ -258,10 +290,18 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 
         [self buildBubble];
         [self buildMenu];
-        [self buildRestoreHotspot];
         [self recompute];
     }
     return self;
+}
+
+- (void)dealloc {
+    [self stopLiveScan];
+}
+
+- (void)didMoveToSuperview {
+    [super didMoveToSuperview];
+    [self refreshLiveScanState];
 }
 
 - (void)buildBubble {
@@ -282,11 +322,8 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     [_bubbleView addSubview:label];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleMenu)];
-    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hideControlsFromLongPress:)];
-    longPress.minimumPressDuration = 0.75;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panBubble:)];
     [_bubbleView addGestureRecognizer:tap];
-    [_bubbleView addGestureRecognizer:longPress];
     [_bubbleView addGestureRecognizer:pan];
     [self addSubview:_bubbleView];
 
@@ -297,141 +334,170 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     _quickToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBlack];
     [_quickToggleButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [_quickToggleButton addTarget:self action:@selector(togglePredictions) forControlEvents:UIControlEventTouchUpInside];
-    UILongPressGestureRecognizer *quickLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hideControlsFromLongPress:)];
-    quickLongPress.minimumPressDuration = 0.75;
-    [_quickToggleButton addGestureRecognizer:quickLongPress];
     UIPanGestureRecognizer *quickPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panBubble:)];
     [_quickToggleButton addGestureRecognizer:quickPan];
     [self addSubview:_quickToggleButton];
     [self positionQuickToggleForBubble];
 }
 
-- (void)buildRestoreHotspot {
-    _restoreHotspot = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 72, 72)];
-    _restoreHotspot.backgroundColor = UIColor.clearColor;
-    _restoreHotspot.alpha = 0.02;
-    _restoreHotspot.hidden = YES;
-    _restoreHotspot.userInteractionEnabled = YES;
-
-    UITapGestureRecognizer *tripleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showControlsFromTripleTap:)];
-    tripleTap.numberOfTapsRequired = 3;
-    tripleTap.numberOfTouchesRequired = 1;
-    [_restoreHotspot addGestureRecognizer:tripleTap];
-
-    [self addSubview:_restoreHotspot];
-}
-
-- (void)hideControlsFromLongPress:(UILongPressGestureRecognizer *)recognizer {
-    if (recognizer.state != UIGestureRecognizerStateBegan) return;
-    [self hideControls];
-}
-
-- (void)showControlsFromTripleTap:(UITapGestureRecognizer *)recognizer {
-    if (recognizer.state != UIGestureRecognizerStateRecognized) return;
-    [self showControls];
-}
-
-- (void)hideControls {
-    self.controlsHidden = YES;
-    self.menuView.hidden = YES;
-    self.bubbleView.hidden = YES;
-    self.quickToggleButton.hidden = YES;
-    self.restoreHotspot.hidden = NO;
-    [self bringSubviewToFront:self.restoreHotspot];
-}
-
-- (void)showControls {
-    self.controlsHidden = NO;
-    self.restoreHotspot.hidden = YES;
-    self.bubbleView.hidden = NO;
-    self.quickToggleButton.hidden = NO;
-    [self bringSubviewToFront:self.canvasView];
-    [self bringSubviewToFront:self.bubbleView];
-    [self bringSubviewToFront:self.quickToggleButton];
-    [self bringSubviewToFront:self.menuView];
-}
-
-- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
-    if (self.hidden || !self.userInteractionEnabled || self.alpha < 0.01) return nil;
-
-    // Hidden mode: let the app receive every touch except the tiny restore corner.
-    if (self.controlsHidden) {
-        CGPoint restorePoint = [self.restoreHotspot convertPoint:point fromView:self];
-        UIView *restoreHit = [self.restoreHotspot hitTest:restorePoint withEvent:event];
-        return restoreHit;
-    }
-
-    // Normal mode: only the menu, ZG bubble, and AIM button catch touches.
-    // The prediction canvas and the rest of the screen pass through to the app.
-    if (self.menuView && !self.menuView.hidden) {
-        CGPoint menuPoint = [self.menuView convertPoint:point fromView:self];
-        UIView *menuHit = [self.menuView hitTest:menuPoint withEvent:event];
-        if (menuHit) return menuHit;
-    }
-
-    if (self.quickToggleButton && !self.quickToggleButton.hidden) {
-        CGPoint quickPoint = [self.quickToggleButton convertPoint:point fromView:self];
-        UIView *quickHit = [self.quickToggleButton hitTest:quickPoint withEvent:event];
-        if (quickHit) return quickHit;
-    }
-
-    if (self.bubbleView && !self.bubbleView.hidden) {
-        CGPoint bubblePoint = [self.bubbleView convertPoint:point fromView:self];
-        UIView *bubbleHit = [self.bubbleView hitTest:bubblePoint withEvent:event];
-        if (bubbleHit) return bubbleHit;
-    }
-
-    return nil;
-}
-
 - (UIButton *)buttonWithTitle:(NSString *)title action:(SEL)action {
     UIButton *button = [UIButton buttonWithType:UIButtonTypeSystem];
     [button setTitle:title forState:UIControlStateNormal];
     [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
-    button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBlack];
+    button.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBold];
     button.titleLabel.adjustsFontSizeToFitWidth = YES;
     button.titleLabel.minimumScaleFactor = 0.72;
-    button.backgroundColor = [UIColor colorWithRed:0.04 green:0.40 blue:0.66 alpha:0.95];
-    button.layer.cornerRadius = 10;
-    button.contentEdgeInsets = UIEdgeInsetsMake(0, 10, 0, 10);
+    button.contentHorizontalAlignment = UIControlContentHorizontalAlignmentLeft;
+    button.backgroundColor = [UIColor colorWithWhite:0 alpha:0.14];
+    button.layer.cornerRadius = 7;
+    button.contentEdgeInsets = UIEdgeInsetsMake(0, 12, 0, 10);
     [button addTarget:self action:action forControlEvents:UIControlEventTouchUpInside];
     return button;
 }
 
-- (void)buildMenu {
-    CGFloat menuWidth = MIN(326.0, MAX(286.0, self.bounds.size.width - 36.0));
-    CGFloat menuHeight = MIN(458.0, MAX(310.0, self.bounds.size.height - 110.0));
-    CGFloat menuY = MIN(150.0, MAX(70.0, self.bounds.size.height - menuHeight - 20.0));
-    _menuView = [[UIView alloc] initWithFrame:CGRectMake(18, menuY, menuWidth, menuHeight)];
-    _menuView.hidden = YES;
-    _menuView.backgroundColor = [UIColor colorWithRed:0.005 green:0.008 blue:0.012 alpha:0.94];
-    _menuView.layer.cornerRadius = 18;
-    _menuView.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.16].CGColor;
-    _menuView.layer.borderWidth = 1;
-    _menuView.layer.shadowColor = UIColor.cyanColor.CGColor;
-    _menuView.layer.shadowOpacity = 0.18;
-    _menuView.layer.shadowRadius = 18;
+- (UILabel *)menuLabelWithText:(NSString *)text
+                          frame:(CGRect)frame
+                           size:(CGFloat)size
+                         weight:(UIFontWeight)weight
+                          color:(UIColor *)color {
+    UILabel *label = [[UILabel alloc] initWithFrame:frame];
+    label.text = text;
+    label.textColor = color;
+    label.font = [UIFont systemFontOfSize:size weight:weight];
+    label.adjustsFontSizeToFitWidth = YES;
+    label.minimumScaleFactor = 0.70;
+    return label;
+}
 
-    UILabel *title = [[UILabel alloc] initWithFrame:CGRectMake(16, 12, menuWidth - 32, 28)];
-    title.text = @"ZG Pooking Overlay";
-    title.textColor = UIColor.whiteColor;
-    title.font = [UIFont systemFontOfSize:19 weight:UIFontWeightBlack];
-    [_menuView addSubview:title];
+- (void)buildMenu {
+    const BOOL landscape = self.bounds.size.width >= self.bounds.size.height;
+    CGFloat menuWidth = landscape ? MIN(760.0, MAX(520.0, self.bounds.size.width - 150.0))
+                                  : MIN(360.0, MAX(306.0, self.bounds.size.width - 32.0));
+    CGFloat menuHeight = landscape ? MIN(382.0, MAX(302.0, self.bounds.size.height - 78.0))
+                                   : MIN(476.0, MAX(336.0, self.bounds.size.height - 114.0));
+    CGFloat menuX = landscape ? (self.bounds.size.width - menuWidth) * 0.50 : 16.0;
+    CGFloat menuY = landscape ? (self.bounds.size.height - menuHeight) * 0.50
+                              : MIN(146.0, MAX(66.0, self.bounds.size.height - menuHeight - 18.0));
+    _menuView = [[UIView alloc] initWithFrame:CGRectMake(menuX, menuY, menuWidth, menuHeight)];
+    _menuView.hidden = YES;
+    _menuView.backgroundColor = [UIColor colorWithRed:0.004 green:0.008 blue:0.010 alpha:0.76];
+    _menuView.layer.cornerRadius = 10;
+    _menuView.layer.borderColor = [UIColor colorWithRed:0.05 green:0.72 blue:0.96 alpha:0.45].CGColor;
+    _menuView.layer.borderWidth = 1.1;
+    _menuView.layer.shadowColor = UIColor.cyanColor.CGColor;
+    _menuView.layer.shadowOpacity = 0.20;
+    _menuView.layer.shadowRadius = 14;
+
     UIPanGestureRecognizer *menuPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panMenu:)];
     [_menuView addGestureRecognizer:menuPan];
 
-    _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(16, 40, menuWidth - 32, 20)];
+    const CGFloat sidebarWidth = landscape ? 142.0 : 106.0;
+    UIView *sidebar = [[UIView alloc] initWithFrame:CGRectMake(0, 0, sidebarWidth, menuHeight)];
+    sidebar.backgroundColor = [UIColor colorWithRed:0.00 green:0.03 blue:0.05 alpha:0.30];
+    [_menuView addSubview:sidebar];
+
+    UIView *divider = [[UIView alloc] initWithFrame:CGRectMake(sidebarWidth, 0, 1, menuHeight)];
+    divider.backgroundColor = [UIColor colorWithRed:0.08 green:0.75 blue:1 alpha:0.48];
+    [_menuView addSubview:divider];
+
+    UIView *logo = [[UIView alloc] initWithFrame:CGRectMake((sidebarWidth - 58.0) * 0.5, 24, 58, 58)];
+    logo.backgroundColor = [UIColor colorWithRed:0.01 green:0.10 blue:0.16 alpha:0.96];
+    logo.layer.cornerRadius = 29;
+    logo.layer.borderColor = [UIColor colorWithRed:0.12 green:0.86 blue:1 alpha:0.70].CGColor;
+    logo.layer.borderWidth = 1.2;
+    logo.layer.shadowColor = UIColor.cyanColor.CGColor;
+    logo.layer.shadowOpacity = 0.22;
+    logo.layer.shadowRadius = 8;
+    [sidebar addSubview:logo];
+
+    UILabel *logoText = [self menuLabelWithText:@"ZG"
+                                          frame:logo.bounds
+                                           size:21
+                                         weight:UIFontWeightBlack
+                                          color:UIColor.whiteColor];
+    logoText.textAlignment = NSTextAlignmentCenter;
+    [logo addSubview:logoText];
+
+    UILabel *brand = [self menuLabelWithText:@"ZavIOS"
+                                       frame:CGRectMake(12, 92, sidebarWidth - 24, 23)
+                                        size:15
+                                      weight:UIFontWeightBlack
+                                       color:UIColor.whiteColor];
+    brand.textAlignment = NSTextAlignmentCenter;
+    [sidebar addSubview:brand];
+
+    NSArray<NSString *> *nav = @[@"VISUALS", @"AIM MENU", @"SETTINGS"];
+    NSArray<NSString *> *navMarks = @[@"EYE", @"AIM", @"GEAR"];
+    for (NSUInteger i = 0; i < nav.count; ++i) {
+        CGFloat y = 146.0 + (CGFloat)i * 46.0;
+        UILabel *mark = [self menuLabelWithText:navMarks[i]
+                                          frame:CGRectMake(12, y, 36, 24)
+                                           size:10
+                                         weight:UIFontWeightBlack
+                                          color:[UIColor colorWithRed:0.22 green:0.88 blue:1 alpha:0.98]];
+        [sidebar addSubview:mark];
+        UILabel *item = [self menuLabelWithText:nav[i]
+                                          frame:CGRectMake(48, y, sidebarWidth - 56, 24)
+                                           size:12
+                                         weight:UIFontWeightBold
+                                          color:UIColor.whiteColor];
+        [sidebar addSubview:item];
+    }
+
+    UILabel *version = [self menuLabelWithText:@"v3.0"
+                                         frame:CGRectMake(14, menuHeight - 54, sidebarWidth - 28, 18)
+                                          size:11
+                                        weight:UIFontWeightBlack
+                                         color:UIColor.whiteColor];
+    version.textAlignment = NSTextAlignmentCenter;
+    [sidebar addSubview:version];
+
+    UILabel *credit = [self menuLabelWithText:@"created by zav G"
+                                        frame:CGRectMake(8, menuHeight - 30, sidebarWidth - 16, 16)
+                                         size:9
+                                       weight:UIFontWeightBold
+                                        color:[UIColor colorWithWhite:1 alpha:0.60]];
+    credit.textAlignment = NSTextAlignmentCenter;
+    [sidebar addSubview:credit];
+
+    const CGFloat contentX = sidebarWidth + 14.0;
+    const CGFloat contentWidth = menuWidth - contentX - 12.0;
+
+    NSArray<NSString *> *tabs = @[@"Prediction", @"Bounds", @"Table Info"];
+    CGFloat tabX = contentX;
+    for (NSUInteger i = 0; i < tabs.count; ++i) {
+        CGFloat tabWidth = i == 2 ? 74.0 : 74.0;
+        UILabel *tab = [self menuLabelWithText:tabs[i]
+                                         frame:CGRectMake(tabX, 10, tabWidth, 23)
+                                          size:12
+                                        weight:UIFontWeightBlack
+                                         color:UIColor.whiteColor];
+        tab.textAlignment = NSTextAlignmentCenter;
+        tab.backgroundColor = i == 0 ? [UIColor colorWithRed:0.04 green:0.48 blue:0.74 alpha:0.78]
+                                     : [UIColor colorWithRed:0.06 green:0.18 blue:0.25 alpha:0.54];
+        tab.layer.cornerRadius = 4;
+        tab.clipsToBounds = YES;
+        [_menuView addSubview:tab];
+        tabX += tabWidth + 6.0;
+    }
+
+    UIView *tabLine = [[UIView alloc] initWithFrame:CGRectMake(contentX, 36, contentWidth, 1)];
+    tabLine.backgroundColor = [UIColor colorWithRed:0.08 green:0.66 blue:1 alpha:0.40];
+    [_menuView addSubview:tabLine];
+
+    _statusLabel = [[UILabel alloc] initWithFrame:CGRectMake(contentX, 40, contentWidth, 20)];
     _statusLabel.textColor = [UIColor colorWithRed:0.18 green:0.90 blue:1 alpha:1];
     _statusLabel.font = [UIFont monospacedSystemFontOfSize:11 weight:UIFontWeightBold];
     [_menuView addSubview:_statusLabel];
 
-    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(16, 72, menuWidth - 32, menuHeight - 104)];
-    scrollView.showsVerticalScrollIndicator = YES;
+    UIScrollView *scrollView = [[UIScrollView alloc] initWithFrame:CGRectMake(contentX, 66, contentWidth, menuHeight - 78)];
+    scrollView.showsVerticalScrollIndicator = NO;
+    scrollView.backgroundColor = UIColor.clearColor;
     [_menuView addSubview:scrollView];
 
-    const CGFloat rowHeight = 42.0;
-    const CGFloat spacing = 8.0;
-    const NSInteger rowCount = 20;
+    const CGFloat rowHeight = landscape ? 30.0 : 34.0;
+    const CGFloat spacing = 5.0;
+    const NSInteger rowCount = 21;
     CGFloat stackHeight = rowCount * rowHeight + (rowCount - 1) * spacing;
     UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectMake(0, 0, scrollView.bounds.size.width, stackHeight)];
     stack.axis = UILayoutConstraintAxisVertical;
@@ -450,6 +516,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     self.pocketHeatButton = [self buttonWithTitle:@"" action:@selector(togglePocketHeat)];
     self.fourLineButton = [self buttonWithTitle:@"" action:@selector(toggleFourLines)];
     self.hiddenRecordButton = [self buttonWithTitle:@"" action:@selector(toggleHiddenRecording)];
+    self.liveScanButton = [self buttonWithTitle:@"" action:@selector(toggleLiveScan)];
     self.scanSmoothButton = [self buttonWithTitle:@"" action:@selector(toggleScanSmoothing)];
     self.shotModeButton = [self buttonWithTitle:@"" action:@selector(cycleShotMode)];
     self.routeButton = [self buttonWithTitle:@"" action:@selector(cycleRoute)];
@@ -471,6 +538,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     [stack addArrangedSubview:self.pocketHeatButton];
     [stack addArrangedSubview:self.fourLineButton];
     [stack addArrangedSubview:self.hiddenRecordButton];
+    [stack addArrangedSubview:self.liveScanButton];
     [stack addArrangedSubview:self.scanSmoothButton];
     [stack addArrangedSubview:self.shotModeButton];
     [stack addArrangedSubview:self.routeButton];
@@ -482,23 +550,12 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     [stack addArrangedSubview:self.ballsButton];
     [stack addArrangedSubview:self.sideLinesButton];
 
-    UILabel *footer = [[UILabel alloc] initWithFrame:CGRectMake(16, menuHeight - 26, menuWidth - 32, 16)];
-    footer.text = @"created by zav G";
-    footer.textAlignment = NSTextAlignmentCenter;
-    footer.textColor = [UIColor colorWithWhite:1 alpha:0.54];
-    footer.font = [UIFont systemFontOfSize:10 weight:UIFontWeightBold];
-    [_menuView addSubview:footer];
-
     [self addSubview:_menuView];
     [self updateMenuState];
 }
 
 - (void)toggleMenu {
-    if (self.controlsHidden) return;
     _menuView.hidden = !_menuView.hidden;
-    if (!_menuView.hidden) {
-        [self bringSubviewToFront:_menuView];
-    }
 }
 
 - (void)panBubble:(UIPanGestureRecognizer *)recognizer {
@@ -537,7 +594,35 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     [recognizer setTranslation:CGPointZero inView:self];
 }
 
-- (void)togglePredictions { self.settings.predictionEnabled = !self.settings.predictionEnabled; [self recompute]; }
+- (void)setPredictionFeatureBundleEnabled:(BOOL)enabled {
+    self.settings.predictionEnabled = enabled;
+    self.settings.liveScanEnabled = enabled;
+    self.settings.cuePredictionEnabled = enabled;
+    self.settings.pocketPredictionEnabled = enabled;
+    self.settings.bankPredictionEnabled = enabled;
+    self.settings.caromPredictionEnabled = enabled;
+    self.settings.ladderGuideEnabled = enabled;
+    self.settings.collisionWarningEnabled = enabled;
+    self.settings.pocketHeatEnabled = enabled;
+    self.settings.fourLinePredictionEnabled = enabled;
+    self.settings.hiddenLineRecordingEnabled = enabled;
+    self.settings.showGhostBall = enabled;
+    self.settings.showDetectedBalls = enabled;
+    self.settings.showSideLines = enabled;
+}
+
+- (void)togglePredictions {
+    const BOOL enable = !self.settings.predictionEnabled;
+    [self setPredictionFeatureBundleEnabled:enable];
+    if (!enable) {
+        _lastResult = zg::Result();
+        self.lastScanConfidence = 0.0;
+        [self.canvasView setPredictionResult:_lastResult];
+        [self stopLiveScan];
+    }
+    [self recompute];
+}
+
 - (void)toggleCuePrediction { self.settings.cuePredictionEnabled = !self.settings.cuePredictionEnabled; [self recompute]; }
 - (void)togglePocketPrediction { self.settings.pocketPredictionEnabled = !self.settings.pocketPredictionEnabled; [self recompute]; }
 - (void)toggleBankPrediction { self.settings.bankPredictionEnabled = !self.settings.bankPredictionEnabled; [self recompute]; }
@@ -547,6 +632,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 - (void)togglePocketHeat { self.settings.pocketHeatEnabled = !self.settings.pocketHeatEnabled; [self recompute]; }
 - (void)toggleFourLines { self.settings.fourLinePredictionEnabled = !self.settings.fourLinePredictionEnabled; [self recompute]; }
 - (void)toggleHiddenRecording { self.settings.hiddenLineRecordingEnabled = !self.settings.hiddenLineRecordingEnabled; [self recompute]; }
+- (void)toggleLiveScan { self.settings.liveScanEnabled = !self.settings.liveScanEnabled; [self refreshLiveScanState]; [self recompute]; }
 - (void)toggleScanSmoothing { self.settings.scanSmoothingEnabled = !self.settings.scanSmoothingEnabled; _stabilizer.reset(); [self recompute]; }
 
 - (void)cycleShotMode {
@@ -593,9 +679,118 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 - (void)toggleBalls { self.settings.showDetectedBalls = !self.settings.showDetectedBalls; [self recompute]; }
 - (void)toggleSideLines { self.settings.showSideLines = !self.settings.showSideLines; [self recompute]; }
 
+- (BOOL)shouldRunLiveScan {
+    return self.settings.predictionEnabled &&
+           self.settings.liveScanEnabled &&
+           self.superview != nil &&
+           !self.hidden &&
+           self.alpha > 0.01;
+}
+
+- (void)refreshLiveScanState {
+    if ([self shouldRunLiveScan]) {
+        [self startLiveScanIfNeeded];
+    } else {
+        [self stopLiveScan];
+    }
+}
+
+- (void)startLiveScanIfNeeded {
+    if (self.liveScanLink) return;
+    self.lastLiveScanTimestamp = 0.0;
+    self.liveScanLink = [CADisplayLink displayLinkWithTarget:self selector:@selector(liveScanTick:)];
+    if (@available(iOS 15.0, *)) {
+        self.liveScanLink.preferredFrameRateRange = CAFrameRateRangeMake(8, 12, 12);
+    } else {
+        self.liveScanLink.preferredFramesPerSecond = 10;
+    }
+    [self.liveScanLink addToRunLoop:NSRunLoop.mainRunLoop forMode:NSRunLoopCommonModes];
+}
+
+- (void)stopLiveScan {
+    [self.liveScanLink invalidate];
+    self.liveScanLink = nil;
+    self.liveScanBusy = NO;
+}
+
+- (void)liveScanTick:(CADisplayLink *)link {
+    if (self.liveScanBusy || ![self shouldRunLiveScan]) return;
+    const CFTimeInterval now = CACurrentMediaTime();
+    if (self.lastLiveScanTimestamp > 0.0 && now - self.lastLiveScanTimestamp < 0.10) return;
+    self.lastLiveScanTimestamp = now;
+    self.liveScanBusy = YES;
+    [self captureAndScanHostView];
+    self.liveScanBusy = NO;
+}
+
+- (BOOL)captureAndScanHostView {
+    UIView *host = self.superview ?: self;
+    const CGSize hostSize = host.bounds.size;
+    if (hostSize.width < 64.0 || hostSize.height < 64.0) return NO;
+
+    const CGFloat maxDimension = 1280.0;
+    const CGFloat longest = MAX(hostSize.width, hostSize.height);
+    const CGFloat captureScale = MIN(1.0, maxDimension / MAX(1.0, longest));
+    const NSUInteger pixelWidth = MAX((NSUInteger)1, (NSUInteger)std::llround(hostSize.width * captureScale));
+    const NSUInteger pixelHeight = MAX((NSUInteger)1, (NSUInteger)std::llround(hostSize.height * captureScale));
+    const NSUInteger bytesPerRow = pixelWidth * 4;
+    std::vector<uint8_t> pixels(bytesPerRow * pixelHeight, 0);
+
+    CGColorSpaceRef colorSpace = CGColorSpaceCreateDeviceRGB();
+    CGContextRef context = CGBitmapContextCreate(pixels.data(),
+                                                 pixelWidth,
+                                                 pixelHeight,
+                                                 8,
+                                                 bytesPerRow,
+                                                 colorSpace,
+                                                 kCGImageAlphaPremultipliedFirst | kCGBitmapByteOrder32Little);
+    CGColorSpaceRelease(colorSpace);
+    if (!context) return NO;
+
+    UIGraphicsPushContext(context);
+    CGContextClearRect(context, CGRectMake(0, 0, pixelWidth, pixelHeight));
+    CGContextScaleCTM(context, captureScale, captureScale);
+
+    BOOL drewSibling = NO;
+    for (UIView *subview in host.subviews) {
+        if (subview == self) break;
+        if (subview.hidden || subview.alpha <= 0.01) continue;
+        CGContextSaveGState(context);
+        CGContextTranslateCTM(context, subview.frame.origin.x, subview.frame.origin.y);
+        BOOL drew = [subview drawViewHierarchyInRect:subview.bounds afterScreenUpdates:NO];
+        if (!drew) {
+            [subview.layer renderInContext:context];
+        }
+        CGContextRestoreGState(context);
+        drewSibling = YES;
+    }
+
+    if (!drewSibling) {
+        const BOOL wasHidden = self.hidden;
+        self.hidden = YES;
+        BOOL drew = [host drawViewHierarchyInRect:host.bounds afterScreenUpdates:NO];
+        if (!drew) {
+            [host.layer renderInContext:context];
+        }
+        self.hidden = wasHidden;
+    }
+
+    UIGraphicsPopContext();
+    CGContextRelease(context);
+
+    const CGFloat coordinateScale = captureScale <= 0.0 ? 1.0 : (1.0 / captureScale);
+    return [self updateFromFrameBytes:pixels.data()
+                                width:pixelWidth
+                               height:pixelHeight
+                          bytesPerRow:bytesPerRow
+                           pixelFormat:ZGPookingPixelFormatBGRA8888
+                      coordinateScale:coordinateScale];
+}
+
 - (void)recompute {
     _lastResult = _engine.compute(_state, [self.settings zg_settings]);
     [self.canvasView setPredictionResult:_lastResult];
+    [self refreshLiveScanState];
     [self updateMenuState];
 }
 
@@ -603,13 +798,15 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     if (!button) return;
     [button setTitle:title forState:UIControlStateNormal];
     if (active) {
-        button.backgroundColor = [UIColor colorWithRed:0.00 green:0.52 blue:0.76 alpha:0.96];
-        button.layer.borderColor = [UIColor colorWithRed:0.18 green:0.92 blue:1.0 alpha:0.52].CGColor;
+        button.backgroundColor = [UIColor colorWithRed:0.02 green:0.42 blue:0.58 alpha:0.60];
+        button.layer.borderColor = [UIColor colorWithRed:0.18 green:0.92 blue:1.0 alpha:0.58].CGColor;
+        [button setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     } else {
-        button.backgroundColor = [UIColor colorWithRed:0.10 green:0.11 blue:0.14 alpha:0.96];
+        button.backgroundColor = [UIColor colorWithRed:0.02 green:0.03 blue:0.04 alpha:0.26];
         button.layer.borderColor = [UIColor colorWithWhite:1 alpha:0.12].CGColor;
+        [button setTitleColor:[UIColor colorWithWhite:1 alpha:0.86] forState:UIControlStateNormal];
     }
-    button.layer.borderWidth = 1.0;
+    button.layer.borderWidth = 0.8;
 }
 
 - (void)updateQuickToggle {
@@ -631,68 +828,73 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 - (void)updateMenuState {
     [self updateQuickToggle];
     [self updateButton:self.enabledButton
-                 title:[NSString stringWithFormat:@"OVERLAY %@", ZGOnOff(self.settings.predictionEnabled)]
+                 title:[NSString stringWithFormat:@"Enable Prediction     %@", ZGOnOff(self.settings.predictionEnabled)]
                 active:self.settings.predictionEnabled];
     [self updateButton:self.cueButton
-                 title:[NSString stringWithFormat:@"CUE LINE %@", ZGOnOff(self.settings.cuePredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Cue Prediction        %@", ZGOnOff(self.settings.cuePredictionEnabled)]
                 active:self.settings.cuePredictionEnabled];
     [self updateButton:self.pocketPathButton
-                 title:[NSString stringWithFormat:@"POCKET PATH %@", ZGOnOff(self.settings.pocketPredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Pocket Path           %@", ZGOnOff(self.settings.pocketPredictionEnabled)]
                 active:self.settings.pocketPredictionEnabled];
     [self updateButton:self.bankPathButton
-                 title:[NSString stringWithFormat:@"BANK PATHS %@", ZGOnOff(self.settings.bankPredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Bank Paths            %@", ZGOnOff(self.settings.bankPredictionEnabled)]
                 active:self.settings.bankPredictionEnabled];
     [self updateButton:self.caromButton
-                 title:[NSString stringWithFormat:@"CAROM PATH %@", ZGOnOff(self.settings.caromPredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Carom Path            %@", ZGOnOff(self.settings.caromPredictionEnabled)]
                 active:self.settings.caromPredictionEnabled];
     [self updateButton:self.ladderButton
-                 title:[NSString stringWithFormat:@"POOKING AIM %@", ZGOnOff(self.settings.ladderGuideEnabled)]
+                 title:[NSString stringWithFormat:@"Pooking Ladder        %@", ZGOnOff(self.settings.ladderGuideEnabled)]
                 active:self.settings.ladderGuideEnabled];
     [self updateButton:self.collisionButton
-                 title:[NSString stringWithFormat:@"BLOCK WARN %@", ZGOnOff(self.settings.collisionWarningEnabled)]
+                 title:[NSString stringWithFormat:@"Block Warning         %@", ZGOnOff(self.settings.collisionWarningEnabled)]
                 active:self.settings.collisionWarningEnabled];
     [self updateButton:self.pocketHeatButton
-                 title:[NSString stringWithFormat:@"POCKET HEAT %@", ZGOnOff(self.settings.pocketHeatEnabled)]
+                 title:[NSString stringWithFormat:@"Pocket Heat           %@", ZGOnOff(self.settings.pocketHeatEnabled)]
                 active:self.settings.pocketHeatEnabled];
     [self updateButton:self.fourLineButton
-                 title:[NSString stringWithFormat:@"FOUR LINES %@", ZGOnOff(self.settings.fourLinePredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Four Line Style       %@", ZGOnOff(self.settings.fourLinePredictionEnabled)]
                 active:self.settings.fourLinePredictionEnabled];
     [self updateButton:self.hiddenRecordButton
-                 title:[NSString stringWithFormat:@"HIDDEN REC %@", ZGOnOff(self.settings.hiddenLineRecordingEnabled)]
+                 title:[NSString stringWithFormat:@"Hidden Line Buffer    %@", ZGOnOff(self.settings.hiddenLineRecordingEnabled)]
                 active:self.settings.hiddenLineRecordingEnabled];
+    [self updateButton:self.liveScanButton
+                 title:[NSString stringWithFormat:@"Live Scanner          %@", ZGOnOff(self.settings.liveScanEnabled)]
+                active:self.settings.liveScanEnabled];
     [self updateButton:self.scanSmoothButton
-                 title:[NSString stringWithFormat:@"SCAN SMOOTH %@", ZGOnOff(self.settings.scanSmoothingEnabled)]
+                 title:[NSString stringWithFormat:@"Scanner Smoothing     %@", ZGOnOff(self.settings.scanSmoothingEnabled)]
                 active:self.settings.scanSmoothingEnabled];
     [self updateButton:self.shotModeButton
-                 title:[NSString stringWithFormat:@"SHOT MODE %@", ZGShotModeName(self.settings.shotMode)]
+                 title:[NSString stringWithFormat:@"Shot Mode             %@", ZGShotModeName(self.settings.shotMode)]
                 active:self.settings.shotMode != ZGPookingShotModeAuto];
     [self updateButton:self.routeButton
-                 title:[NSString stringWithFormat:@"ROUTE %@", ZGRouteName(self.settings.scanRoute)]
+                 title:[NSString stringWithFormat:@"Scan Route            %@", ZGRouteName(self.settings.scanRoute)]
                 active:YES];
     [self updateButton:self.styleButton
-                 title:[NSString stringWithFormat:@"STYLE %@", ZGStyleName(self.settings.predictionStyle)]
+                 title:[NSString stringWithFormat:@"Prediction Style      %@", ZGStyleName(self.settings.predictionStyle)]
                 active:YES];
     [self updateButton:self.selectedPocketButton
-                 title:[NSString stringWithFormat:@"POCKET %@", ZGPocketName(self.settings.selectedPocket, self.settings.manualPocket)]
+                 title:[NSString stringWithFormat:@"Pocket Target         %@", ZGPocketName(self.settings.selectedPocket, self.settings.manualPocket)]
                 active:self.settings.manualPocket];
     [self updateButton:self.bounceButton
-                 title:[NSString stringWithFormat:@"BOUNCES %ld", (long)self.settings.maxBounces]
+                 title:[NSString stringWithFormat:@"Bounds / Bounces      %ld", (long)self.settings.maxBounces]
                 active:self.settings.maxBounces > 0];
     [self updateButton:self.lengthButton
-                 title:[NSString stringWithFormat:@"LINE LENGTH %.0f%%", self.settings.lineLength * 100.0]
+                 title:[NSString stringWithFormat:@"Line Reach            %.0f%%", self.settings.lineLength * 100.0]
                 active:YES];
     [self updateButton:self.ghostButton
-                 title:[NSString stringWithFormat:@"GHOST BALL %@", ZGOnOff(self.settings.showGhostBall)]
+                 title:[NSString stringWithFormat:@"Ghost Ball            %@", ZGOnOff(self.settings.showGhostBall)]
                 active:self.settings.showGhostBall];
     [self updateButton:self.ballsButton
-                 title:[NSString stringWithFormat:@"BALL MARKERS %@", ZGOnOff(self.settings.showDetectedBalls)]
+                 title:[NSString stringWithFormat:@"Ball Markers          %@", ZGOnOff(self.settings.showDetectedBalls)]
                 active:self.settings.showDetectedBalls];
     [self updateButton:self.sideLinesButton
-                 title:[NSString stringWithFormat:@"CENTERLINES %@", ZGOnOff(self.settings.showSideLines)]
+                 title:[NSString stringWithFormat:@"Table Centerlines     %@", ZGOnOff(self.settings.showSideLines)]
                 active:self.settings.showSideLines];
 
-    self.statusLabel.text = [NSString stringWithFormat:@"POOKING | %@ | %@ | H%lu | %.0f%%",
+    NSString *scanner = self.liveScanLink ? @"LIVE" : @"IDLE";
+    self.statusLabel.text = [NSString stringWithFormat:@"ZavIOS | %@ | %@ | %@ | H%lu | %.0f%%",
                              ZGOnOff(self.settings.predictionEnabled),
+                             scanner,
                              ZGShotModeName(self.settings.shotMode),
                              (unsigned long)_lastResult.hiddenLines.size(),
                              self.lastScanConfidence * 100.0];
@@ -730,11 +932,17 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
                        width:(NSUInteger)width
                       height:(NSUInteger)height
                  bytesPerRow:(NSUInteger)bytesPerRow
-                  pixelFormat:(ZGPookingPixelFormat)pixelFormat {
+                  pixelFormat:(ZGPookingPixelFormat)pixelFormat
+              coordinateScale:(CGFloat)coordinateScale {
+    if (!bytes || width == 0 || height == 0 || bytesPerRow < width * 4) {
+        self.lastScanConfidence = 0.0;
+        [self updateMenuState];
+        return NO;
+    }
     zg::FrameScanOptions options;
     options.pixelFormat = pixelFormat == ZGPookingPixelFormatBGRA8888 ? zg::PixelFormat::BGRA8888 : zg::PixelFormat::RGBA8888;
     options.maxBalls = 16;
-    options.sampleStep = 3;
+    options.sampleStep = 2;
     const zg::FrameScanResult scan = zg::FrameScanner::scan(bytes, width, height, bytesPerRow, options);
     if (!scan.valid) {
         self.lastScanConfidence = 0.0;
@@ -743,10 +951,25 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     }
     zg::FrameStabilizerOptions smoothing;
     smoothing.enabled = self.settings.scanSmoothingEnabled;
-    _state = _stabilizer.update(scan.state, scan.confidence, smoothing);
+    zg::GameState scaled = scan.state;
+    ZGScaleGameState(scaled, coordinateScale);
+    _state = _stabilizer.update(scaled, scan.confidence, smoothing);
     self.lastScanConfidence = scan.confidence;
     [self recompute];
     return YES;
+}
+
+- (BOOL)updateFromFrameBytes:(const uint8_t *)bytes
+                       width:(NSUInteger)width
+                      height:(NSUInteger)height
+                 bytesPerRow:(NSUInteger)bytesPerRow
+                  pixelFormat:(ZGPookingPixelFormat)pixelFormat {
+    return [self updateFromFrameBytes:bytes
+                                width:width
+                               height:height
+                          bytesPerRow:bytesPerRow
+                           pixelFormat:pixelFormat
+                       coordinateScale:1.0];
 }
 
 - (NSUInteger)hiddenLineCount {
@@ -798,6 +1021,7 @@ static ZGPookingOverlaySettings *ZGSharedSettings = nil;
 
 + (void)setVisible:(BOOL)visible {
     ZGSharedOverlayView.hidden = !visible;
+    [ZGSharedOverlayView refreshLiveScanState];
 }
 
 + (NSUInteger)hiddenLineCount {

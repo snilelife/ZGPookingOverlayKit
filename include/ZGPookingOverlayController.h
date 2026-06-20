@@ -91,6 +91,7 @@ typedef struct {
 @property (nonatomic) BOOL fourLinePredictionEnabled;
 @property (nonatomic) BOOL hiddenLineRecordingEnabled;
 @property (nonatomic) BOOL scanSmoothingEnabled;
+@property (nonatomic) BOOL liveScanEnabled;
 @property (nonatomic) BOOL manualPocket;
 @property (nonatomic) BOOL showSideLines;
 @property (nonatomic) BOOL showDetectedBalls;
