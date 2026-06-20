@@ -17,19 +17,10 @@ targets:
     type: framework
     platform: iOS
     sources:
-      # Exact source list prevents duplicate-symbol builds from extra/stale .cpp files.
-      - path: src/ZGPookingOverlayController.mm
-      - path: src/ZGPookingOverlayAutoStart.mm
-      - path: src/ZGPookingEngine.cpp
-      - path: src/ZGPookingFrameScanner.cpp
-      - path: bridges/ZGPookingOverlayExports.mm
+      - path: src
+      - path: bridges
       - path: include
         headerVisibility: public
-    dependencies:
-      - sdk: Foundation.framework
-      - sdk: UIKit.framework
-      - sdk: CoreGraphics.framework
-      - sdk: QuartzCore.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zg.pookingoverlaykit
@@ -37,8 +28,6 @@ targets:
         MACH_O_TYPE: mh_dylib
         SKIP_INSTALL: "NO"
         BUILD_LIBRARY_FOR_DISTRIBUTION: "YES"
-        OTHER_LDFLAGS: "$(inherited) -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore"
-        LD_RUNPATH_SEARCH_PATHS: "$(inherited) @executable_path/Frameworks @loader_path/Frameworks"
         CODE_SIGNING_ALLOWED: "NO"
         CODE_SIGNING_REQUIRED: "NO"
         CODE_SIGN_IDENTITY: ""

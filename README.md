@@ -2,6 +2,14 @@
 
 Clean drop-in overlay module for a host app that intentionally starts it. This version is tuned for Pooking / `com.pool.club.billiards.city` style aim lines.
 
+This build keeps the ZavIOS menu/logo shell and replaces the old generic scanner with a fresh Pooking-only scanner. The active scanner now follows this route:
+
+```text
+Pooking felt/table component -> ball candidates inside table -> cue ball + cue/guide angle -> prediction engine
+```
+
+Lobby/map screens are rejected before prediction so the overlay does not draw random lines outside gameplay.
+
 This package is designed to build as a dynamic iOS framework. The framework binary is a dylib-style Mach-O inside:
 
 ```text
@@ -108,6 +116,14 @@ BOOL ok = ZGPookingOverlayUpdateFromFrameBytes(bytes,
 
 The scanner estimates the Pooking table area, cue ball, visible balls, and the bright/cyan/violet on-screen guide line, then feeds the prediction engine. Best accuracy still comes from direct game geometry; frame scanning is a fallback when geometry is not available. If iOS does not expose the game renderer through normal view capture, feed BGRA/RGBA bytes from the host render path instead.
 
+The current scanner is rebuilt from scratch for Pooking:
+
+- Finds the largest connected Pooking felt component and rejects lobby screens.
+- Searches for cue/object ball candidates only inside the playable table.
+- Scores cue-ball candidates using white/roundness plus real cue-stick and guide direction evidence.
+- Tracks short yellow/white Pooking guide strips and the wooden cue behind the cue ball.
+- Outputs a full `GameState` every scan so cue movement immediately changes prediction geometry.
+
 ## Dynamic Guide Solver
 
 When the host supplies `guide.valid = YES`, or when the frame scanner detects the visible Pooking guide line, the engine uses the guide direction to pick the contacted ball, calculate the ghost-ball position, then recompute:
@@ -141,6 +157,13 @@ The scanner regression test draws two Pooking-like frames with different guide a
 ```bash
 clang++ -std=c++17 -Iinclude tests/pooking_scanner_engine_test.cpp src/ZGPookingFrameScanner.cpp src/ZGPookingEngine.cpp -o /tmp/pooking_scanner_engine_test
 /tmp/pooking_scanner_engine_test
+```
+
+The real screenshot regression test uses the Pooking screenshots in `tests/fixtures/pooking_screens_bmp`: Photos 1-4 must scan as gameplay frames and Photo 5 must be rejected as the lobby/map:
+
+```bash
+clang++ -std=c++17 -Iinclude tests/pooking_real_screenshot_test.cpp src/ZGPookingFrameScanner.cpp src/ZGPookingEngine.cpp -o /tmp/pooking_real_screenshot_test
+/tmp/pooking_real_screenshot_test
 ```
 
 The engine mode regression test verifies four-line output and hidden recording across every style/mode combination, plus guide movement, object-path movement, cue-after-hit movement, finite geometry, bank rail targeting, multi-rail bank chaining, and blocked-lane avoidance:

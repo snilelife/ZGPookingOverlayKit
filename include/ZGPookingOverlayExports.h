@@ -50,13 +50,6 @@ BOOL ZGPookingOverlayUpdateFromFrameBytes(const uint8_t *bytes,
                                           NSUInteger bytesPerRow,
                                           ZGPookingPixelFormat pixelFormat);
 
-
-__attribute__((visibility("default")))
-void ZGPookingOverlayAutoAttachNow(void);
-
-__attribute__((visibility("default")))
-void ZGPookingOverlayAutoStartSetEnabled(BOOL enabled);
-
 #ifdef __cplusplus
 }
 #endif

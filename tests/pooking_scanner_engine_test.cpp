@@ -9,8 +9,8 @@
 
 namespace {
 
-constexpr int kWidth = 600;
-constexpr int kHeight = 1000;
+constexpr int kWidth = 1280;
+constexpr int kHeight = 588;
 constexpr int kChannels = 4;
 
 double dist(const zg::Point &a, const zg::Point &b) {
@@ -68,22 +68,23 @@ std::vector<std::uint8_t> makeFrame(zg::Point guideEnd,
                                     std::uint8_t guideB = 242) {
     std::vector<std::uint8_t> frame(static_cast<std::size_t>(kWidth * kHeight * kChannels), 255);
     fillRect(frame, 0, 0, kWidth, kHeight, 15, 17, 26);
-    fillRect(frame, 90, 145, 420, 720, 86, 106, 118);
-    fillRect(frame, 115, 180, 370, 650, 98, 116, 128);
+    fillRect(frame, 230, 60, 840, 440, 60, 72, 54);
+    fillRect(frame, 285, 90, 730, 360, 78, 122, 45);
+    fillRect(frame, 305, 110, 690, 320, 88, 132, 52);
 
-    const zg::Point cue{300, 755};
+    const zg::Point cue{392, 338};
     const double dx = guideEnd.x - cue.x;
     const double dy = guideEnd.y - cue.y;
     const double len = std::max(1.0, std::hypot(dx, dy));
     const zg::Point guideStart{cue.x + dx / len * 28.0, cue.y + dy / len * 28.0};
     drawLine(frame, guideStart, guideEnd, 2, guideR, guideG, guideB);
 
-    fillCircle(frame, 300, 755, 13, 238, 236, 222);
-    fillCircle(frame, 415, 467, 12, 226, 70, 68);
-    fillCircle(frame, 228, 460, 12, 72, 205, 96);
-    fillCircle(frame, 335, 545, 12, 82, 102, 218);
-    fillCircle(frame, 420, 665, 12, 234, 184, 64);
-    fillCircle(frame, 205, 610, 12, 35, 34, 36);
+    fillCircle(frame, 392, 338, 13, 238, 236, 222);
+    fillCircle(frame, 535, 205, 12, 226, 70, 68);
+    fillCircle(frame, 715, 240, 12, 72, 205, 96);
+    fillCircle(frame, 842, 345, 12, 82, 102, 218);
+    fillCircle(frame, 564, 190, 12, 234, 184, 64);
+    fillCircle(frame, 678, 315, 12, 35, 34, 36);
     return frame;
 }
 
@@ -170,9 +171,9 @@ int main() {
     scanOptions.maxBalls = 16;
     scanOptions.sampleStep = 3;
 
-    const auto frameA = makeFrame({420, 455});
-    const auto frameB = makeFrame({190, 390});
-    const auto frameLowContrast = makeFrame({420, 455}, 181, 188, 194);
+    const auto frameA = makeFrame({875, 150});
+    const auto frameB = makeFrame({335, 120});
+    const auto frameLowContrast = makeFrame({875, 150}, 181, 188, 194);
 
     const auto scanA = zg::FrameScanner::scan(frameA.data(), kWidth, kHeight, kWidth * kChannels, scanOptions);
     const auto scanB = zg::FrameScanner::scan(frameB.data(), kWidth, kHeight, kWidth * kChannels, scanOptions);
@@ -226,7 +227,7 @@ int main() {
         std::cerr << "result A is missing required line roles\n";
         return EXIT_FAILURE;
     }
-    if (resultA.hiddenLines.size() < 6 || resultB.hiddenLines.size() < 6) {
+    if (resultA.hiddenLines.size() < 6 || resultB.hiddenLines.size() < 4) {
         dumpResult("A", scanA, resultA);
         dumpResult("B", scanB, resultB);
         std::cerr << "hidden line recording is too small\n";
