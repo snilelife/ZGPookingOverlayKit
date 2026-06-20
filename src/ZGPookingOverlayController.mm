@@ -239,6 +239,8 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 @property (nonatomic, strong) UIButton *ghostButton;
 @property (nonatomic, strong) UIButton *ballsButton;
 @property (nonatomic, strong) UIButton *sideLinesButton;
+@property (nonatomic, strong) UIView *restoreHotspot;
+@property (nonatomic) BOOL controlsHidden;
 @end
 
 @implementation ZGPookingOverlayView
@@ -256,6 +258,7 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 
         [self buildBubble];
         [self buildMenu];
+        [self buildRestoreHotspot];
         [self recompute];
     }
     return self;
@@ -279,8 +282,11 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     [_bubbleView addSubview:label];
 
     UITapGestureRecognizer *tap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(toggleMenu)];
+    UILongPressGestureRecognizer *longPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hideControlsFromLongPress:)];
+    longPress.minimumPressDuration = 0.75;
     UIPanGestureRecognizer *pan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panBubble:)];
     [_bubbleView addGestureRecognizer:tap];
+    [_bubbleView addGestureRecognizer:longPress];
     [_bubbleView addGestureRecognizer:pan];
     [self addSubview:_bubbleView];
 
@@ -291,10 +297,91 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
     _quickToggleButton.titleLabel.font = [UIFont systemFontOfSize:12 weight:UIFontWeightBlack];
     [_quickToggleButton setTitleColor:UIColor.whiteColor forState:UIControlStateNormal];
     [_quickToggleButton addTarget:self action:@selector(togglePredictions) forControlEvents:UIControlEventTouchUpInside];
+    UILongPressGestureRecognizer *quickLongPress = [[UILongPressGestureRecognizer alloc] initWithTarget:self action:@selector(hideControlsFromLongPress:)];
+    quickLongPress.minimumPressDuration = 0.75;
+    [_quickToggleButton addGestureRecognizer:quickLongPress];
     UIPanGestureRecognizer *quickPan = [[UIPanGestureRecognizer alloc] initWithTarget:self action:@selector(panBubble:)];
     [_quickToggleButton addGestureRecognizer:quickPan];
     [self addSubview:_quickToggleButton];
     [self positionQuickToggleForBubble];
+}
+
+- (void)buildRestoreHotspot {
+    _restoreHotspot = [[UIView alloc] initWithFrame:CGRectMake(0, 0, 72, 72)];
+    _restoreHotspot.backgroundColor = UIColor.clearColor;
+    _restoreHotspot.alpha = 0.02;
+    _restoreHotspot.hidden = YES;
+    _restoreHotspot.userInteractionEnabled = YES;
+
+    UITapGestureRecognizer *tripleTap = [[UITapGestureRecognizer alloc] initWithTarget:self action:@selector(showControlsFromTripleTap:)];
+    tripleTap.numberOfTapsRequired = 3;
+    tripleTap.numberOfTouchesRequired = 1;
+    [_restoreHotspot addGestureRecognizer:tripleTap];
+
+    [self addSubview:_restoreHotspot];
+}
+
+- (void)hideControlsFromLongPress:(UILongPressGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateBegan) return;
+    [self hideControls];
+}
+
+- (void)showControlsFromTripleTap:(UITapGestureRecognizer *)recognizer {
+    if (recognizer.state != UIGestureRecognizerStateRecognized) return;
+    [self showControls];
+}
+
+- (void)hideControls {
+    self.controlsHidden = YES;
+    self.menuView.hidden = YES;
+    self.bubbleView.hidden = YES;
+    self.quickToggleButton.hidden = YES;
+    self.restoreHotspot.hidden = NO;
+    [self bringSubviewToFront:self.restoreHotspot];
+}
+
+- (void)showControls {
+    self.controlsHidden = NO;
+    self.restoreHotspot.hidden = YES;
+    self.bubbleView.hidden = NO;
+    self.quickToggleButton.hidden = NO;
+    [self bringSubviewToFront:self.canvasView];
+    [self bringSubviewToFront:self.bubbleView];
+    [self bringSubviewToFront:self.quickToggleButton];
+    [self bringSubviewToFront:self.menuView];
+}
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (self.hidden || !self.userInteractionEnabled || self.alpha < 0.01) return nil;
+
+    // Hidden mode: let the app receive every touch except the tiny restore corner.
+    if (self.controlsHidden) {
+        CGPoint restorePoint = [self.restoreHotspot convertPoint:point fromView:self];
+        UIView *restoreHit = [self.restoreHotspot hitTest:restorePoint withEvent:event];
+        return restoreHit;
+    }
+
+    // Normal mode: only the menu, ZG bubble, and AIM button catch touches.
+    // The prediction canvas and the rest of the screen pass through to the app.
+    if (self.menuView && !self.menuView.hidden) {
+        CGPoint menuPoint = [self.menuView convertPoint:point fromView:self];
+        UIView *menuHit = [self.menuView hitTest:menuPoint withEvent:event];
+        if (menuHit) return menuHit;
+    }
+
+    if (self.quickToggleButton && !self.quickToggleButton.hidden) {
+        CGPoint quickPoint = [self.quickToggleButton convertPoint:point fromView:self];
+        UIView *quickHit = [self.quickToggleButton hitTest:quickPoint withEvent:event];
+        if (quickHit) return quickHit;
+    }
+
+    if (self.bubbleView && !self.bubbleView.hidden) {
+        CGPoint bubblePoint = [self.bubbleView convertPoint:point fromView:self];
+        UIView *bubbleHit = [self.bubbleView hitTest:bubblePoint withEvent:event];
+        if (bubbleHit) return bubbleHit;
+    }
+
+    return nil;
 }
 
 - (UIButton *)buttonWithTitle:(NSString *)title action:(SEL)action {
@@ -407,7 +494,11 @@ static ZGOverlayLine ZGExportLine(const zg::Line &line) {
 }
 
 - (void)toggleMenu {
+    if (self.controlsHidden) return;
     _menuView.hidden = !_menuView.hidden;
+    if (!_menuView.hidden) {
+        [self bringSubviewToFront:_menuView];
+    }
 }
 
 - (void)panBubble:(UIPanGestureRecognizer *)recognizer {
