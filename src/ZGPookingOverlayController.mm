@@ -214,12 +214,19 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
     CGContextSetLineCap(ctx, kCGLineCapRound);
     CGContextSetLineJoin(ctx, kCGLineJoinRound);
 
+    BOOL hasCueEnd = NO;
+    CGPoint cueEnd = CGPointZero;
     for (const auto &line : _result.lines) {
         CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithRed:line.color.r green:line.color.g blue:line.color.b alpha:line.color.a].CGColor);
         CGContextSetLineWidth(ctx, line.width);
         CGContextMoveToPoint(ctx, line.start.x, line.start.y);
         CGContextAddLineToPoint(ctx, line.end.x, line.end.y);
         CGContextStrokePath(ctx);
+
+        if (!hasCueEnd && line.role == zg::LineRole::CueGuide) {
+            cueEnd = CGPointMake(line.end.x, line.end.y);
+            hasCueEnd = YES;
+        }
     }
 
     for (const auto &circle : _result.circles) {
@@ -227,6 +234,15 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
         CGContextSetLineWidth(ctx, circle.width);
         CGRect oval = CGRectMake(circle.center.x - circle.radius, circle.center.y - circle.radius, circle.radius * 2.0, circle.radius * 2.0);
         CGContextStrokeEllipseInRect(ctx, oval);
+    }
+
+    if (hasCueEnd) {
+        CGRect endBox = CGRectMake(cueEnd.x - 10.0, cueEnd.y - 10.0, 20.0, 20.0);
+        CGContextSetFillColorWithColor(ctx, [UIColor colorWithRed:0.12 green:1.00 blue:0.28 alpha:0.20].CGColor);
+        CGContextFillRect(ctx, endBox);
+        CGContextSetStrokeColorWithColor(ctx, [UIColor colorWithRed:0.10 green:1.00 blue:0.30 alpha:0.90].CGColor);
+        CGContextSetLineWidth(ctx, 2.0);
+        CGContextStrokeRect(ctx, endBox);
     }
 }
 
@@ -273,6 +289,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
 - (void)recompute;
 - (void)refreshLiveScanState;
 - (void)stopLiveScan;
+- (void)clearScanStateAndPrediction;
 @end
 
 @implementation ZGPookingOverlayView
@@ -297,6 +314,26 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
 
 - (void)dealloc {
     [self stopLiveScan];
+}
+
+- (UIView *)hitTest:(CGPoint)point withEvent:(UIEvent *)event {
+    if (self.hidden || self.alpha <= 0.01 || !self.userInteractionEnabled) return nil;
+
+    if (!_menuView.hidden) {
+        CGPoint menuPoint = [_menuView convertPoint:point fromView:self];
+        UIView *menuHit = [_menuView hitTest:menuPoint withEvent:event];
+        if (menuHit) return menuHit;
+    }
+
+    CGPoint bubblePoint = [_bubbleView convertPoint:point fromView:self];
+    UIView *bubbleHit = [_bubbleView hitTest:bubblePoint withEvent:event];
+    if (bubbleHit) return bubbleHit;
+
+    CGPoint quickPoint = [_quickToggleButton convertPoint:point fromView:self];
+    UIView *quickHit = [_quickToggleButton hitTest:quickPoint withEvent:event];
+    if (quickHit) return quickHit;
+
+    return nil;
 }
 
 - (void)didMoveToSuperview {
@@ -497,7 +534,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
 
     const CGFloat rowHeight = landscape ? 30.0 : 34.0;
     const CGFloat spacing = 5.0;
-    const NSInteger rowCount = 21;
+    const NSInteger rowCount = 6;
     CGFloat stackHeight = rowCount * rowHeight + (rowCount - 1) * spacing;
     UIStackView *stack = [[UIStackView alloc] initWithFrame:CGRectMake(0, 0, scrollView.bounds.size.width, stackHeight)];
     stack.axis = UILayoutConstraintAxisVertical;
@@ -530,25 +567,10 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
 
     [stack addArrangedSubview:self.enabledButton];
     [stack addArrangedSubview:self.cueButton];
-    [stack addArrangedSubview:self.pocketPathButton];
-    [stack addArrangedSubview:self.bankPathButton];
-    [stack addArrangedSubview:self.caromButton];
-    [stack addArrangedSubview:self.ladderButton];
-    [stack addArrangedSubview:self.collisionButton];
-    [stack addArrangedSubview:self.pocketHeatButton];
-    [stack addArrangedSubview:self.fourLineButton];
-    [stack addArrangedSubview:self.hiddenRecordButton];
     [stack addArrangedSubview:self.liveScanButton];
     [stack addArrangedSubview:self.scanSmoothButton];
-    [stack addArrangedSubview:self.shotModeButton];
-    [stack addArrangedSubview:self.routeButton];
-    [stack addArrangedSubview:self.styleButton];
-    [stack addArrangedSubview:self.selectedPocketButton];
-    [stack addArrangedSubview:self.bounceButton];
     [stack addArrangedSubview:self.lengthButton];
-    [stack addArrangedSubview:self.ghostButton];
-    [stack addArrangedSubview:self.ballsButton];
-    [stack addArrangedSubview:self.sideLinesButton];
+    [stack addArrangedSubview:self.styleButton];
 
     [self addSubview:_menuView];
     [self updateMenuState];
@@ -598,26 +620,24 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
     self.settings.predictionEnabled = enabled;
     self.settings.liveScanEnabled = enabled;
     self.settings.cuePredictionEnabled = enabled;
-    self.settings.pocketPredictionEnabled = enabled;
-    self.settings.bankPredictionEnabled = enabled;
-    self.settings.caromPredictionEnabled = enabled;
-    self.settings.ladderGuideEnabled = enabled;
-    self.settings.collisionWarningEnabled = enabled;
-    self.settings.pocketHeatEnabled = enabled;
-    self.settings.fourLinePredictionEnabled = enabled;
+    self.settings.pocketPredictionEnabled = NO;
+    self.settings.bankPredictionEnabled = NO;
+    self.settings.caromPredictionEnabled = NO;
+    self.settings.ladderGuideEnabled = NO;
+    self.settings.collisionWarningEnabled = NO;
+    self.settings.pocketHeatEnabled = NO;
+    self.settings.fourLinePredictionEnabled = NO;
     self.settings.hiddenLineRecordingEnabled = enabled;
-    self.settings.showGhostBall = enabled;
-    self.settings.showDetectedBalls = enabled;
-    self.settings.showSideLines = enabled;
+    self.settings.showGhostBall = NO;
+    self.settings.showDetectedBalls = NO;
+    self.settings.showSideLines = NO;
 }
 
 - (void)togglePredictions {
     const BOOL enable = !self.settings.predictionEnabled;
     [self setPredictionFeatureBundleEnabled:enable];
+    [self clearScanStateAndPrediction];
     if (!enable) {
-        _lastResult = zg::Result();
-        self.lastScanConfidence = 0.0;
-        [self.canvasView setPredictionResult:_lastResult];
         [self stopLiveScan];
     }
     [self recompute];
@@ -670,8 +690,8 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
 }
 
 - (void)nextLineLength {
-    self.settings.lineLength += 0.10;
-    if (self.settings.lineLength > 1.35) self.settings.lineLength = 0.45;
+    self.settings.lineLength += 0.15;
+    if (self.settings.lineLength > 1.80) self.settings.lineLength = 0.85;
     [self recompute];
 }
 
@@ -794,6 +814,14 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
     [self updateMenuState];
 }
 
+- (void)clearScanStateAndPrediction {
+    _state = zg::GameState();
+    _lastResult = zg::Result();
+    self.lastScanConfidence = 0.0;
+    _stabilizer.reset();
+    [self.canvasView setPredictionResult:_lastResult];
+}
+
 - (void)updateButton:(UIButton *)button title:(NSString *)title active:(BOOL)active {
     if (!button) return;
     [button setTitle:title forState:UIControlStateNormal];
@@ -831,7 +859,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
                  title:[NSString stringWithFormat:@"Enable Prediction     %@", ZGOnOff(self.settings.predictionEnabled)]
                 active:self.settings.predictionEnabled];
     [self updateButton:self.cueButton
-                 title:[NSString stringWithFormat:@"Cue Prediction        %@", ZGOnOff(self.settings.cuePredictionEnabled)]
+                 title:[NSString stringWithFormat:@"Cue Ball Line         %@", ZGOnOff(self.settings.cuePredictionEnabled)]
                 active:self.settings.cuePredictionEnabled];
     [self updateButton:self.pocketPathButton
                  title:[NSString stringWithFormat:@"Pocket Path           %@", ZGOnOff(self.settings.pocketPredictionEnabled)]
@@ -879,7 +907,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
                  title:[NSString stringWithFormat:@"Bounds / Bounces      %ld", (long)self.settings.maxBounces]
                 active:self.settings.maxBounces > 0];
     [self updateButton:self.lengthButton
-                 title:[NSString stringWithFormat:@"Line Reach            %.0f%%", self.settings.lineLength * 100.0]
+                 title:[NSString stringWithFormat:@"Line Extender         %.0f%%", self.settings.lineLength * 100.0]
                 active:YES];
     [self updateButton:self.ghostButton
                  title:[NSString stringWithFormat:@"Ghost Ball            %@", ZGOnOff(self.settings.showGhostBall)]
@@ -935,7 +963,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
                   pixelFormat:(ZGPookingPixelFormat)pixelFormat
               coordinateScale:(CGFloat)coordinateScale {
     if (!bytes || width == 0 || height == 0 || bytesPerRow < width * 4) {
-        self.lastScanConfidence = 0.0;
+        [self clearScanStateAndPrediction];
         [self updateMenuState];
         return NO;
     }
@@ -945,7 +973,7 @@ static void ZGScaleGameState(zg::GameState &state, CGFloat scale) {
     options.sampleStep = 2;
     const zg::FrameScanResult scan = zg::FrameScanner::scan(bytes, width, height, bytesPerRow, options);
     if (!scan.valid) {
-        self.lastScanConfidence = 0.0;
+        [self clearScanStateAndPrediction];
         [self updateMenuState];
         return NO;
     }

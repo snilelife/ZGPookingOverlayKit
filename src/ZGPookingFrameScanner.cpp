@@ -279,10 +279,12 @@ TableCandidate detectTable(const std::uint8_t *bytes,
     const double feltWidth = best->maxX - best->minX + step;
     const double feltHeight = best->maxY - best->minY + step;
     const double aspect = feltWidth / std::max(1.0, feltHeight);
+    const double areaRatio = (feltWidth * feltHeight) / std::max(1.0, static_cast<double>(width * height));
 
     if (best->count < std::max(180, static_cast<int>(screenSamples * 0.018))) return table;
-    if (feltWidth < width * 0.34 || feltHeight < height * 0.24) return table;
-    if (aspect < 1.15) return table;
+    if (feltWidth < width * 0.42 || feltHeight < height * 0.46) return table;
+    if (areaRatio < 0.26) return table;
+    if (aspect < 1.15 || aspect > 2.25) return table;
 
     const double expandX = std::max(12.0, feltWidth * 0.032);
     const double expandY = std::max(10.0, feltHeight * 0.040);

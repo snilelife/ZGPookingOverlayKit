@@ -2,13 +2,24 @@
 
 Clean drop-in overlay module for a host app that intentionally starts it. This version is tuned for Pooking / `com.pool.club.billiards.city` style aim lines.
 
-This build keeps the ZavIOS menu/logo shell and replaces the old generic scanner with a fresh Pooking-only scanner. The active scanner now follows this route:
+This build keeps the ZavIOS menu/logo shell and replaces the old generic scanner with a fresh Pooking-only scanner. V13 also switches the overlay to touch pass-through mode: only the `ZG` bubble, `AIM` quick button, and visible menu panel receive touches; the rest of the game remains tappable.
+
+The menu is intentionally reduced to the core working mechanism for testing:
+
+- `Enable Prediction`
+- `Cue Ball Line`
+- `Live Scanner`
+- `Scanner Smoothing`
+- `Line Extender`
+- `Prediction Style`
+
+The active scanner follows this route:
 
 ```text
 Pooking felt/table component -> ball candidates inside table -> cue ball + cue/guide angle -> prediction engine
 ```
 
-Lobby/map screens are rejected before prediction so the overlay does not draw random lines outside gameplay.
+Lobby/map/title screens are rejected before prediction, and invalid scans clear the canvas immediately so the overlay does not draw stale lines outside gameplay.
 
 This package is designed to build as a dynamic iOS framework. The framework binary is a dylib-style Mach-O inside:
 

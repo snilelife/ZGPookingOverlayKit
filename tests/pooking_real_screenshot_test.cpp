@@ -141,20 +141,28 @@ int main() {
                   << "\n";
     }
 
-    BmpImage lobby;
-    if (!loadBmp(base + "5-Photo-5.bmp", lobby)) {
-        std::cerr << "could not load lobby fixture\n";
-        return EXIT_FAILURE;
-    }
-    const auto lobbyScan = zg::FrameScanner::scan(lobby.rgba.data(),
-                                                 lobby.width,
-                                                 lobby.height,
-                                                 lobby.width * 4,
+    const char *negative[] = {
+        "5-Photo-5.bmp",
+        "title-1-Photo-1.bmp",
+        "title-2-Photo-2.bmp",
+        "title-3-Photo-3.bmp"
+    };
+    for (const char *name : negative) {
+        BmpImage image;
+        if (!loadBmp(base + name, image)) {
+            std::cerr << "could not load negative fixture " << name << "\n";
+            return EXIT_FAILURE;
+        }
+        const auto scan = zg::FrameScanner::scan(image.rgba.data(),
+                                                 image.width,
+                                                 image.height,
+                                                 image.width * 4,
                                                  scanOptions);
-    if (lobbyScan.valid) {
-        std::cerr << "lobby screen was incorrectly detected as a table\n";
-        return EXIT_FAILURE;
+        if (scan.valid) {
+            std::cerr << "non-table screen was incorrectly detected as a table: " << name << "\n";
+            return EXIT_FAILURE;
+        }
+        std::cout << name << " rejected\n";
     }
-    std::cout << "lobby rejected\n";
     return EXIT_SUCCESS;
 }
