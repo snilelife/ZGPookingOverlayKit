@@ -1,0 +1,30 @@
+workflows:
+  build-ios-dynamic-framework:
+    name: Build ZGPookingOverlayKit dynamic framework
+    max_build_duration: 30
+    instance_type: mac_mini_m2
+    environment:
+      xcode: latest
+    scripts:
+      - name: Install XcodeGen
+        script: |
+          set -e
+          if ! command -v xcodegen >/dev/null 2>&1; then
+            brew install xcodegen
+          fi
+      - name: Build framework
+        script: |
+          set -euo pipefail
+          chmod +x scripts/build_ios_framework.sh
+          scripts/build_ios_framework.sh
+      - name: Package artifact
+        script: |
+          set -euo pipefail
+          mkdir -p artifacts
+          FRAMEWORK_PATH=$(find build/Build/Products/Release-iphoneos -maxdepth 1 -name "ZGPookingOverlayKit.framework" -type d | head -n 1)
+          test -d "$FRAMEWORK_PATH"
+          (cd "$(dirname "$FRAMEWORK_PATH")" && zip -qry "$CM_BUILD_DIR/artifacts/ZGPookingOverlayKit.framework.zip" ZGPookingOverlayKit.framework)
+          ls -lh artifacts
+    artifacts:
+      - artifacts/ZGPookingOverlayKit.framework.zip
+      - build/Build/Products/Release-iphoneos/ZGPookingOverlayKit.framework
