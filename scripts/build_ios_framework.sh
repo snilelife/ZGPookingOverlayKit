@@ -14,18 +14,7 @@ mkdir -p generated build
 
 xcodegen generate --spec project.yml
 
-xcodebuild \
-  -project ZGPookingOverlayKit.xcodeproj \
-  -scheme ZGPookingOverlayKit \
-  -configuration Release \
-  -sdk iphoneos \
-  -destination 'generic/platform=iOS' \
-  -derivedDataPath build \
-  clean build \
-  CODE_SIGNING_ALLOWED=NO \
-  CODE_SIGNING_REQUIRED=NO \
-  CODE_SIGN_IDENTITY="" \
-  DEVELOPMENT_TEAM=""
+xcodebuild   -project ZGPookingOverlayKit.xcodeproj   -scheme ZGPookingOverlayKit   -configuration Release   -sdk iphoneos   -destination 'generic/platform=iOS'   -derivedDataPath build   clean build   CODE_SIGNING_ALLOWED=NO   CODE_SIGNING_REQUIRED=NO   CODE_SIGN_IDENTITY=""   DEVELOPMENT_TEAM=""   'OTHER_LDFLAGS=$(inherited) -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore'
 
 echo "Built products:"
 find build/Build/Products/Release-iphoneos -maxdepth 2 -print

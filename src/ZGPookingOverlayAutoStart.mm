@@ -52,10 +52,8 @@ static UIWindow *ZGPookingFindBestWindow(void) {
 
 static void ZGPookingOverlayAutoAttachOnMain(void) {
     if (!ZGPookingOverlayAutoStartEnabled) return;
-
     UIWindow *window = ZGPookingFindBestWindow();
     if (!window) return;
-
     ZGPookingOverlayStartInWindow(window);
     ZGPookingOverlaySetVisible(YES);
 }
@@ -70,24 +68,19 @@ static void ZGPookingOverlayAutoAttachAfterDelay(NSTimeInterval delay) {
 static void ZGPookingOverlayInstallAutoStartObservers(void) {
     if (ZGPookingOverlayAutoStartInstalled) return;
     ZGPookingOverlayAutoStartInstalled = YES;
-
     NSNotificationCenter *center = NSNotificationCenter.defaultCenter;
-
     void (^attachBlock)(NSNotification *) = ^(__unused NSNotification *note) {
         ZGPookingOverlayAutoAttachAfterDelay(0.05);
         ZGPookingOverlayAutoAttachAfterDelay(0.35);
         ZGPookingOverlayAutoAttachAfterDelay(1.20);
     };
-
     [center addObserverForName:UIApplicationDidFinishLaunchingNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:attachBlock];
     [center addObserverForName:UIApplicationDidBecomeActiveNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:attachBlock];
     [center addObserverForName:UIApplicationWillEnterForegroundNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:attachBlock];
     [center addObserverForName:UIWindowDidBecomeKeyNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:attachBlock];
-
     if (@available(iOS 13.0, *)) {
         [center addObserverForName:UISceneDidActivateNotification object:nil queue:NSOperationQueue.mainQueue usingBlock:attachBlock];
     }
-
     ZGPookingOverlayAutoAttachAfterDelay(0.10);
     ZGPookingOverlayAutoAttachAfterDelay(0.75);
     ZGPookingOverlayAutoAttachAfterDelay(2.00);
@@ -103,9 +96,7 @@ void ZGPookingOverlayAutoAttachNow(void) {
 extern "C" __attribute__((visibility("default")))
 void ZGPookingOverlayAutoStartSetEnabled(BOOL enabled) {
     ZGPookingOverlayAutoStartEnabled = enabled;
-    if (enabled) {
-        ZGPookingOverlayAutoAttachNow();
-    }
+    if (enabled) ZGPookingOverlayAutoAttachNow();
 }
 
 __attribute__((constructor))
