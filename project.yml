@@ -21,11 +21,17 @@ targets:
       - path: bridges
       - path: include
         headerVisibility: public
+    dependencies:
+      - sdk: Foundation.framework
+      - sdk: UIKit.framework
+      - sdk: CoreGraphics.framework
+      - sdk: QuartzCore.framework
     settings:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.zg.pookingoverlaykit
         DEFINES_MODULE: "YES"
         MACH_O_TYPE: mh_dylib
+        OTHER_LDFLAGS: "$(inherited) -framework Foundation -framework UIKit -framework CoreGraphics -framework QuartzCore"
         SKIP_INSTALL: "NO"
         BUILD_LIBRARY_FOR_DISTRIBUTION: "YES"
         CODE_SIGNING_ALLOWED: "NO"
